@@ -6,17 +6,39 @@ const parser = new Parser();
 const NEWS_SOURCES = [
   { name: "Punch Nigeria", url: "https://punchng.com/feed/", category: "general" },
   { name: "Vanguard Nigeria", url: "https://www.vanguardngr.com/feed/", category: "general" },
-  { name: "Channels TV", url: "https://www.channelstv.com/feed/", category: "broadcast" },
+  { name: "Tribune Nigeria", url: "https://tribuneonlineng.com/feed/", category: "general" },
+  { name: "Sun Nigeria", url: "https://www.sunnewsonline.com/feed/", category: "general" },
+  { name: "Leadership Nigeria", url: "https://leadership.ng/feed/", category: "general" },
+  { name: "Blueprint Nigeria", url: "https://www.blueprint.ng/feed/", category: "general" },
+  { name: "Daily Post Nigeria", url: "https://dailypost.ng/feed/", category: "general" },
+  { name: "Legit Nigeria", url: "https://www.legit.ng/rss/all.rss", category: "general" },
+  { name: "Naija News", url: "https://www.naijanews.com/feed/", category: "general" },
+  { name: "Naija247News", url: "https://www.naija247news.com/feed/", category: "general" },
   { name: "Premium Times", url: "https://www.premiumtimesng.com/feed", category: "investigative" },
-  { name: "The Nation Nigeria", url: "https://thenationonlineng.net/feed/", category: "general" },
-  { name: "Daily Trust", url: "https://dailytrust.com/feed", category: "northern" },
-  { name: "BusinessDay Nigeria", url: "https://businessday.ng/feed/", category: "business" },
   { name: "Sahara Reporters", url: "https://saharareporters.com/rss.xml", category: "independent" },
+  { name: "HumAngle", url: "https://humanglemedia.com/feed/", category: "investigative" },
+  { name: "Channels TV", url: "https://www.channelstv.com/feed/", category: "broadcast" },
+  { name: "TVC News", url: "https://www.tvcnews.tv/feed/", category: "broadcast" },
+  { name: "Daily Trust", url: "https://dailytrust.com/feed", category: "northern" },
+  { name: "Arewa Agenda", url: "https://arewa24.com/feed/", category: "northern" },
+  { name: "Nairametrics", url: "https://nairametrics.com/feed/", category: "business" },
+  // International sources covering Nigeria/Africa
+  { name: "BBC Africa", url: "https://feeds.bbci.co.uk/news/world/africa/rss.xml", category: "international" },
+  { name: "Al Jazeera Africa", url: "https://www.aljazeera.com/xml/rss/all.xml", category: "international" },
+  { name: "Reuters Africa", url: "https://feeds.reuters.com/reuters/africaNews", category: "international" },
+{ name: "VOA Africa", url: "https://www.voanews.com/feeds/world/africa.rss", category: "international" },
+{ name: "BusinessDay Nigeria", url: "http://businessday.ng/feed/", category: "business" },
+ 
 ];
 
 async function scrapeRSSFeed(source) {
   try {
-    const feed = await parser.parseURL(source.url);
+    const feed = await Promise.race([
+      parser.parseURL(source.url),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Timeout")), 10000)
+      ),
+    ]);
     const articles = feed.items.slice(0, 10).map((item) => ({
       source: source.name,
       category: source.category,
@@ -42,7 +64,6 @@ async function runAllScrapers() {
     .flatMap((r) => r.value);
 
   console.log(`📰 Total articles: ${allArticles.length}`);
-
   if (allArticles.length === 0) return [];
 
   const { error } = await supabase

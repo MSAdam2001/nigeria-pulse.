@@ -19,8 +19,15 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "google-search-results-nodejs": "^2.1.0",
+    "google-trends-api": "^4.9.2",
+    "groq-sdk": "^1.1.2",
     "node-cron": "^4.2.1",
-    "rss-parser": "^3.13.0"
+    "node-telegram-bot-api": "^0.67.0",
+    "puppeteer": "^24.42.0",
+    "resend": "^6.12.3",
+    "rss-parser": "^3.13.0",
+    "twilio": "^6.0.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
