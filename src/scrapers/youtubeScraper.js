@@ -4,54 +4,77 @@ const supabase = require("../config/supabase");
 const parser = new Parser();
 
 // ─────────────────────────────────────────────────────────────
-//  NIGERIAN YOUTUBE CHANNELS TO MONITOR
-//  Add/remove channel IDs as needed
+//  NIGERIAN YOUTUBE CHANNELS — IDs verified May 2026
+//  Source: live youtube.com/channel/ID URLs
 // ─────────────────────────────────────────────────────────────
 const NIGERIAN_CHANNELS = [
-  { name: "Channels TV",        id: "UCzLHODRACGYckCLgrpPAe4g" },
-  { name: "TVC News Nigeria",   id: "UCh3qlpBMR3tBBbgn4ib5qeg" },
-  { name: "Arise News",         id: "UCp4KNUFIxXKABQw1tiO2hxQ" },
-  { name: "Punch Newspapers",   id: "UCbYCGGEITnMOoWBJLrVdgcQ" },
-  { name: "Vanguard Newspaper", id: "UCnvHdqAmJlnjW0pHKXx9GYg" },
-  { name: "Daily Trust",        id: "UCx2xzNTj_4_SyKM3xjlzNUw" },
-  { name: "NTA News",           id: "UCt2JxRqC2bjzFtfN6RbhGRw" },
+  // Broadcast / TV
+  { name: "Channels TV",        id: "UCEXGDNclvmg6RW0vipJYsTQ" }, // ✅ fixed
+  { name: "TVC News Nigeria",   id: "UCgp4A6I8LCWrhUzn-5SbKvA" }, // ✅ fixed
+  { name: "Arise News",         id: "UCyEJX-kSj0kOOCS7Qlq2G7g" }, // ✅ fixed
+  { name: "NTA Network",        id: "UCLLWAXn5F415g2kNAcE_T1g" }, // ✅ fixed
+
+  // Print → video
+  { name: "Punch Newspapers",   id: "UCKBMh5v6VrB0t75ryyiVsBg" }, // ✅ fixed
+  { name: "Vanguard News TV",   id: "UCkRLkFEEJR3o7QYm1r8_5yg" }, // ✅ fixed
+  { name: "Guardian Nigeria",   id: "UCjV6LnXFtXzWoYxnq-zIvXw" }, // ✅ new
 ];
 
 // ─────────────────────────────────────────────────────────────
-//  1. TRENDING — YouTube RSS (no API key needed)
-//     Each channel has a public RSS feed of its latest uploads
+//  SHARED FETCH HEADERS
+//  Prevents YouTube from returning 404 to bot-like requests
+// ─────────────────────────────────────────────────────────────
+const HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept-Language": "en-US,en;q=0.9",
+  Accept: "application/rss+xml, application/xml, text/xml, */*",
+};
+
+// ─────────────────────────────────────────────────────────────
+//  1. VIDEOS via YouTube RSS (no API key needed)
 // ─────────────────────────────────────────────────────────────
 async function scrapeYouTubeTrending() {
-  console.log("\n📺 Scraping YouTube trending videos...");
+  console.log("\n📺 Scraping YouTube RSS feeds...");
   const allVideos = [];
 
   const results = await Promise.allSettled(
     NIGERIAN_CHANNELS.map(async (channel) => {
       try {
         const url = `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.id}`;
+
+        // Pass User-Agent headers so YouTube serves the feed
+        const customParser = new Parser({
+          headers: HEADERS,
+          timeout: 10000,
+        });
+
         const feed = await Promise.race([
-          parser.parseURL(url),
+          customParser.parseURL(url),
           new Promise((_, reject) =>
             setTimeout(() => reject(new Error("Timeout")), 10000)
           ),
         ]);
 
-        return feed.items.slice(0, 5).map((item) => ({
+        const videos = feed.items.slice(0, 5).map((item) => ({
           source: `YouTube — ${channel.name}`,
-          category: "youtube_video",
+          category: "social_video",
           title: item.title || "",
-          summary: item.contentSnippet || item.content || "",
+          summary:
+            item.contentSnippet?.slice(0, 200) ||
+            item.content?.slice(0, 200) ||
+            "",
           link: item.link || "",
           published_at: item.pubDate
             ? new Date(item.pubDate).toISOString()
             : new Date().toISOString(),
           scraped_at: new Date().toISOString(),
-          // extra metadata stored in summary prefix
-          meta_channel_id: channel.id,
-          meta_channel_name: channel.name,
         }));
+
+        console.log(`  ✅ ${channel.name}: ${videos.length} videos`);
+        return videos;
       } catch (err) {
-        console.error(`❌ YouTube RSS failed: ${channel.name} — ${err.message}`);
+        console.error(`  ❌ YouTube RSS: ${channel.name} — ${err.message}`);
         return [];
       }
     })
@@ -61,29 +84,31 @@ async function scrapeYouTubeTrending() {
     .filter((r) => r.status === "fulfilled")
     .forEach((r) => allVideos.push(...r.value));
 
-  console.log(`✅ YouTube trending: ${allVideos.length} videos`);
+  console.log(`✅ YouTube videos (RSS): ${allVideos.length} total`);
 
   if (allVideos.length > 0) {
     const { error } = await supabase
       .from("raw_signals")
       .upsert(allVideos, { onConflict: "link", ignoreDuplicates: true });
-    if (error) console.error("❌ YouTube trending save error:", error.message);
-    else console.log("💾 YouTube trending saved");
+    if (error) console.error("❌ YouTube video save error:", error.message);
+    else console.log("💾 YouTube videos saved");
   }
 
   return allVideos;
 }
 
 // ─────────────────────────────────────────────────────────────
-//  2. COMMENTS — YouTube Data API v3
-//     Pulls top comments from the latest video of each channel
+//  2. COMMENTS via YouTube Data API v3
 //     Requires YOUTUBE_API_KEY in .env
+//     Free tier: 10,000 units/day
 // ─────────────────────────────────────────────────────────────
 async function fetchCommentsForVideo(videoId, channelName) {
   if (!process.env.YOUTUBE_API_KEY) return [];
 
   try {
-    const url = new URL("https://www.googleapis.com/youtube/v3/commentThreads");
+    const url = new URL(
+      "https://www.googleapis.com/youtube/v3/commentThreads"
+    );
     url.searchParams.set("part", "snippet");
     url.searchParams.set("videoId", videoId);
     url.searchParams.set("maxResults", "20");
@@ -91,15 +116,14 @@ async function fetchCommentsForVideo(videoId, channelName) {
     url.searchParams.set("key", process.env.YOUTUBE_API_KEY);
 
     const res = await Promise.race([
-      fetch(url.toString()),
+      fetch(url.toString(), { headers: HEADERS }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Timeout")), 8000)
       ),
     ]);
 
     if (!res.ok) {
-      // Comments disabled on this video — not an error
-      if (res.status === 403) return [];
+      if (res.status === 403) return []; // comments disabled — silent skip
       throw new Error(`HTTP ${res.status}`);
     }
 
@@ -119,26 +143,27 @@ async function fetchCommentsForVideo(videoId, channelName) {
       };
     });
   } catch (err) {
-    console.error(`❌ Comments fetch failed (${videoId}): ${err.message}`);
+    console.error(`  ❌ Comments fetch (${videoId}): ${err.message}`);
     return [];
   }
 }
 
 async function scrapeYouTubeComments() {
   if (!process.env.YOUTUBE_API_KEY) {
-    console.log("⚠️  No YOUTUBE_API_KEY — skipping YouTube comments");
+    console.log("⚠️  No YOUTUBE_API_KEY — skipping comments");
     return [];
   }
 
-  console.log("\n💬 Scraping YouTube comments...");
+  console.log("\n💬 Scraping YouTube comments via Data API...");
   const allComments = [];
 
   for (const channel of NIGERIAN_CHANNELS) {
     try {
-      // Get the latest video ID from this channel's RSS feed
       const url = `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.id}`;
+      const customParser = new Parser({ headers: HEADERS, timeout: 8000 });
+
       const feed = await Promise.race([
-        parser.parseURL(url),
+        customParser.parseURL(url),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error("Timeout")), 8000)
         ),
@@ -147,22 +172,20 @@ async function scrapeYouTubeComments() {
       const latestItem = feed.items[0];
       if (!latestItem?.link) continue;
 
-      // Extract video ID from URL
       const videoId = new URL(latestItem.link).searchParams.get("v");
       if (!videoId) continue;
 
-      console.log(`  💬 ${channel.name}: fetching comments on "${latestItem.title?.slice(0, 50)}..."`);
+      console.log(`  💬 ${channel.name}: "${latestItem.title?.slice(0, 50)}..."`);
       const comments = await fetchCommentsForVideo(videoId, channel.name);
       allComments.push(...comments);
 
-      // Respect YouTube API quota — small delay between channels
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500)); // quota protection
     } catch (err) {
-      console.error(`❌ Comment scrape failed: ${channel.name} — ${err.message}`);
+      console.error(`  ❌ Comment scrape: ${channel.name} — ${err.message}`);
     }
   }
 
-  console.log(`✅ YouTube comments: ${allComments.length} comments`);
+  console.log(`✅ YouTube comments (API): ${allComments.length} total`);
 
   if (allComments.length > 0) {
     const { error } = await supabase

@@ -21,34 +21,7 @@ const SOCIAL_FEEDS = [
     category: "social_reddit",
   },
 
-  // ── YOUTUBE — verified channel IDs from YouTube URLs ──
-  {
-    name: "Channels TV YouTube",
-    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCEXGDNclvmg6RW0vipJYsTQ",
-    category: "social_video",
-  },
-  {
-    name: "TVC News YouTube",
-    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCgp4A6I8LCWrhUzn-5SbKvA",
-    category: "social_video",
-  },
-  {
-    name: "Arise News YouTube",
-    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCyEJX-kSj0kOOCS7Qlq2G7g",
-    category: "social_video",
-  },
-  {
-    name: "Guardian Nigeria YouTube",
-    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCjV6LnXFtXzWoYxnq-zIvXw",
-    category: "social_video",
-  },
-  {
-    name: "TV360 Nigeria YouTube",
-    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCBzu4YqGiBxBD8pq8NiBuKw",
-    category: "social_video",
-  },
-
-  // ── CATEGORY RSS FEEDS (confirmed working in your terminal) ──
+  // ── CATEGORY RSS FEEDS ──
   {
     name: "Daily Post Politics",
     url: "https://dailypost.ng/category/politics/feed/",
@@ -64,22 +37,20 @@ const SOCIAL_FEEDS = [
     url: "https://www.legit.ng/rss/economy.rss",
     category: "social_signal",
   },
-  
   {
     name: "ThisDay Nigeria",
     url: "https://www.thisdaylive.com/index.php/feed/",
     category: "social_signal",
   },
-  
 ];
 
 async function runSocialScrapers() {
   console.log("\n📱 Running Social Media Scrapers...");
   let allPosts = [];
 
+  // ── Reddit + RSS feeds ──
   for (const feed of SOCIAL_FEEDS) {
     try {
-      // ── REDDIT JSON (handles both /new and /search endpoints) ──
       if (feed.url.includes("reddit.com")) {
         const res = await Promise.race([
           fetch(feed.url, {
@@ -119,7 +90,7 @@ async function runSocialScrapers() {
         continue;
       }
 
-      // ── STANDARD RSS (YouTube + category feeds) ──
+      // ── Standard RSS ──
       const result = await Promise.race([
         parser.parseURL(feed.url),
         new Promise((_, reject) =>
@@ -141,10 +112,18 @@ async function runSocialScrapers() {
 
       allPosts = [...allPosts, ...posts];
       console.log(`✅ ${feed.name}: ${posts.length} posts`);
-
     } catch (err) {
       console.error(`❌ ${feed.name}: ${err.message}`);
     }
+  }
+
+  // ── YouTube (videos + comments) via youtubeScraper ──
+  try {
+    const { runYouTubeScraper } = require("./youtubeScraper");
+    const ytPosts = await runYouTubeScraper();
+    allPosts = [...allPosts, ...ytPosts];
+  } catch (err) {
+    console.error(`❌ YouTube scraper error: ${err.message}`);
   }
 
   if (allPosts.length > 0) {

@@ -25,9 +25,10 @@ const NEWS_SOURCES = [
   // International sources covering Nigeria/Africa
   { name: "BBC Africa", url: "https://feeds.bbci.co.uk/news/world/africa/rss.xml", category: "international" },
   { name: "Al Jazeera Africa", url: "https://www.aljazeera.com/xml/rss/all.xml", category: "international" },
-  { name: "Reuters Africa", url: "https://feeds.reuters.com/reuters/africaNews", category: "international" },
-{ name: "VOA Africa", url: "https://www.voanews.com/feeds/world/africa.rss", category: "international" },
-{ name: "BusinessDay Nigeria", url: "http://businessday.ng/feed/", category: "business" },
+  { name: "BusinessDay Nigeria", url: "http://businessday.ng/feed/", category: "business" },
+  { name: "Arise News",          url: "https://www.arise.tv/feed/", category: "broadcast" }, 
+  { name: "TheCable Nigeria", url: "https://www.thecable.ng/feed/", category: "investigative" },
+
  
 ];
 

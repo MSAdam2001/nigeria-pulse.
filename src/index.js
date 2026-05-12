@@ -7,6 +7,7 @@ const { runAllScrapers } = require("./scrapers/newsScraper");
 const { scrapeGoogleTrends } = require("./scrapers/trendsScraper");
 const { runSocialScrapers } = require("./scrapers/socialScraper");
 const { scrapeNairaRate } = require("./scrapers/nairaScraper");
+const { runNairalandScraper } = require("./scrapers/nairalandScraper");
 const { runSummarizer } = require("./services/summarizer");
 const { sendDailyDigest } = require("./services/digestService");
 
@@ -45,6 +46,12 @@ cron.schedule("2 */2 * * *", async () => {
   await runSocialScrapers();
 });
 
+// Nairaland every 2 hours at :06
+cron.schedule("6 */2 * * *", async () => {
+  console.log("\n🇳🇬 [CRON] Scraping Nairaland...");
+  await runNairalandScraper();
+});
+
 // AI Summarizer every 2 hours at :05
 cron.schedule("5 */2 * * *", async () => {
   console.log("\n🧠 [CRON] Summarizing...");
@@ -81,6 +88,9 @@ async function startup() {
   await scrapeGoogleTrends();
   await runSocialScrapers();
 
+  console.log("\n🔄 Step 2c: Scraping Nairaland...");
+  await runNairalandScraper();
+
   console.log("\n🔄 Step 3: Running AI summarizer...");
   await new Promise((r) => setTimeout(r, 3000));
   await runSummarizer();
@@ -91,7 +101,7 @@ async function startup() {
 
 app.listen(PORT, async () => {
   console.log(`🌍 Nigeria Pulse API → http://localhost:${PORT}`);
-  console.log(`🔁 Schedule: scrape :00, trends :02, summarize :05`);
+  console.log(`🔁 Schedule: scrape :00, trends :02, nairaland :06, summarize :05`);
   await startup();
 });
 

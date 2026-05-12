@@ -1,171 +1,296 @@
+
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const Groq = require("groq-sdk");
 const supabase = require("../config/supabase");
 require("dotenv").config();
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-async function getRecentArticles() {
-  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from("raw_signals")
-    .select("*")
-    .gte("scraped_at", twoHoursAgo)
-    .order("scraped_at", { ascending: false });
+// ─────────────────────────────────────────────────────────────
+//  PROMPT
+//  Both engines receive the exact same prompt for fair comparison
+// ─────────────────────────────────────────────────────────────
+function buildPrompt(articles) {
+  const articleText = articles
+    .slice(0, 80) // cap to avoid token overflow
+    .map((a, i) => `[${i + 1}] SOURCE: ${a.source} | CATEGORY: ${a.category}\nTITLE: ${a.title}\nSUMMARY: ${a.summary?.slice(0, 300) || ""}`)
+    .join("\n\n");
 
-  if (error) { console.error("❌ Fetch error:", error.message); return []; }
-  return data || [];
-}
+  return `You are Nigeria Pulse — an AI analyst monitoring Nigerian news, social media, and trends.
 
-async function runSummarizer() {
-  console.log("\n🧠 Running AI Summarizer...");
-  const articles = await getRecentArticles();
-  console.log(`📰 Found ${articles.length} recent articles`);
+Analyze the articles below and return a JSON object. Return ONLY valid JSON, no markdown, no extra text.
 
-  if (articles.length === 0) return null;
-
- const articleList = articles.slice(0, 35).map((a, i) =>
-  `${i + 1}. [${a.source}] ${a.title}`
-).join("\n");
-
-  const prompt = `You are Nigeria Pulse — an AI intelligence analyst specializing in Nigerian public discourse and geopolitics.
-
-You have two jobs:
-
-JOB 1: TOP 5 NIGERIAN TOPICS
-Analyze the articles and find the 5 most discussed topics IN Nigeria right now.
-
-RULES FOR JOB 1:
-- Focus on stories Nigerians are actually talking about
-- Politics, economy, security, education, health, infrastructure
-- Score intensity 1-10 based on volume of coverage and public interest
-- Mark in_govt_agenda: true if government has responded or is involved
-
-JOB 2: FOREIGN EVENTS AFFECTING NIGERIA
-Scan for ANY foreign news that has a DIRECT impact on Nigeria through these channels:
-
-OIL & ENERGY: Nigeria earns 90% of forex from oil. Any war, OPEC decision,
-US shale news, or Middle East conflict that moves oil prices DIRECTLY affects
-Nigeria's budget, Naira value, and fuel prices.
-
-DOLLAR & FOREX: US Fed decisions, dollar strengthening, or any event that
-affects USD availability hits Nigeria's import-dependent economy hard.
-
-DIASPORA: 1.7 million Nigerians live abroad. Events in UK, USA, South Africa,
-UAE that affect Nigerians abroad (deportations, policy changes, remittances).
-
-TRADE & IMPORTS: Nigeria imports most of its food and goods. China slowdown,
-Red Sea shipping disruptions, or EU trade policy changes affect Nigerian prices.
-
-REGIONAL SECURITY: Events in Niger, Mali, Chad, Cameroon, Sudan directly
-affect Nigeria's northern border security and Boko Haram dynamics.
-
-FOOD & COMMODITIES: Global wheat, rice, or fertilizer price changes hit
-Nigerian food inflation directly.
-
-EXAMPLES OF WHAT TO FLAG:
-- "Iran attacks Israel" = NIGERIA IMPACT: oil prices spike, fuel imports cost more
-- "US Fed raises rates" = NIGERIA IMPACT: dollar strengthens, Naira pressure increases
-- "South Africa xenophobia" = NIGERIA IMPACT: Nigerian diaspora at risk
-- "OPEC cuts production" = NIGERIA IMPACT: Nigeria quota affected, oil revenue changes
-- "France wins World Cup" = NOT relevant
-- "US election results" = only relevant if it affects Nigeria policy or aid
-
-NEWS ARTICLES + SOCIAL SIGNALS (last 2 hours from ${articles.length} sources):
-Note: Sources labeled "Twitter Politics NG", "Twitter Economy NG", "Google Trends Nigeria" 
-are social media signals — weight them heavily as they show what real Nigerians are 
-discussing RIGHT NOW, not just what media is reporting.
-${articleList}
-
-Return ONLY valid JSON. No markdown, no explanation, no code fences.
-
+REQUIRED JSON STRUCTURE:
 {
-  "generated_at": "${new Date().toISOString()}",
-  "total_articles_analyzed": ${articles.length},
   "top_topics": [
     {
-      "rank": 1,
-      "name": "Short Topic Name",
-      "summary": "One sentence max 20 words, Nigerian angle only.",
+      "name": "short topic name (3-6 words)",
+      "summary": "2-3 sentence plain-English summary of what is happening and why it matters to Nigerians",
       "intensity": 8,
-      "sources": ["Source Name"],
-      "in_govt_agenda": false,
+      "sentiment": "negative",
+      "sentiment_reason": "one sentence explaining the sentiment score",
+      "category": "politics",
+      "in_govt_agenda": true,
       "foreign_impact": false,
-      "foreign_impact_reason": ""
+      "sources_cited": ["Punch Nigeria", "Channels TV"],
+      "keywords": ["keyword1", "keyword2", "keyword3"]
     }
   ],
   "foreign_alerts": [
     {
-      "event": "Name of foreign event",
-      "country": "Country where it happened",
-      "nigeria_impact": "Specific explanation of how this affects Nigeria",
-      "impact_sector": "oil|forex|diaspora|trade|security|food|other",
-      "impact_score": 7,
-      "what_to_watch": "What Nigerians should monitor as a result"
+      "event": "brief description of global event",
+      "nigeria_impact": "one sentence on how this affects Nigeria specifically"
     }
-  ]
-}`;
+  ],
+  "overall_sentiment": "mixed",
+  "total_articles_analyzed": 45,
+  "analysis_confidence": 0.85,
+  "dominant_category": "politics",
+  "generated_at": "${new Date().toISOString()}"
+}
 
+RULES:
+- Return exactly 5 top_topics, ranked by public interest intensity
+- intensity: 1-10 integer (10 = extremely viral/urgent)
+- sentiment per topic: "positive" | "negative" | "neutral" | "mixed"
+- overall_sentiment: "positive" | "negative" | "neutral" | "mixed"
+- category: one of "politics" | "economy" | "security" | "entertainment" | "sports" | "technology" | "social" | "religion" | "health" | "international"
+- in_govt_agenda: true if Nigerian federal/state government is directly involved
+- foreign_impact: true if topic involves international actors or has global implications
+- sources_cited: list up to 3 source names that covered this topic most
+- keywords: 3-5 keywords for this topic
+- analysis_confidence: 0.0-1.0, how confident you are given the data quality
+- foreign_alerts: 0-3 items max, only include if genuinely relevant to Nigeria
+- If data is sparse, still return valid JSON with best estimates
+
+ARTICLES TO ANALYZE:
+${articleText}`;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SCORING — pick the better result
+//  Scores based on: completeness, confidence, topic quality
+// ─────────────────────────────────────────────────────────────
+function scoreResult(parsed, engineName) {
+  let score = 0;
+  const reasons = [];
+
+  if (!parsed || typeof parsed !== "object") return { score: 0, reasons: ["Invalid JSON"] };
+
+  // Has all 5 topics
+  const topicCount = parsed.top_topics?.length || 0;
+  score += topicCount * 10;
+  if (topicCount < 5) reasons.push(`Only ${topicCount}/5 topics`);
+
+  // Each topic has required fields
+  (parsed.top_topics || []).forEach((t, i) => {
+    if (t.name?.length > 3) score += 5;
+    if (t.summary?.length > 50) score += 5;
+    if (t.sentiment) score += 3;
+    if (t.sentiment_reason) score += 2;
+    if (t.category) score += 2;
+    if (Array.isArray(t.sources_cited) && t.sources_cited.length > 0) score += 3;
+    if (Array.isArray(t.keywords) && t.keywords.length > 0) score += 2;
+    if (typeof t.intensity === "number") score += 2;
+    if (typeof t.in_govt_agenda === "boolean") score += 1;
+    if (typeof t.foreign_impact === "boolean") score += 1;
+  });
+
+  // Confidence score bonus
+  const confidence = parsed.analysis_confidence || 0;
+  score += Math.round(confidence * 20);
+
+  // Has overall_sentiment
+  if (parsed.overall_sentiment) score += 5;
+  if (parsed.dominant_category) score += 5;
+
+  return { score, reasons, engine: engineName };
+}
+
+// ─────────────────────────────────────────────────────────────
+//  GEMINI FLASH ENGINE
+// ─────────────────────────────────────────────────────────────
+async function runGemini(prompt) {
   try {
-    const response = await groq.chat.completions.create({
-  model: "llama-3.1-8b-instant",
-  messages: [{ role: "user", content: prompt }],
-  max_tokens: 800,
-  temperature: 0.3,
-});
-
-    const raw = response.choices[0].message.content.trim();
-    const cleaned = raw.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(cleaned);
-
-    console.log("✅ Groq summarized", parsed.top_topics.length, "topics");
-    if (parsed.foreign_alerts?.length > 0) {
-      console.log(`🌍 ${parsed.foreign_alerts.length} foreign alerts detected`);
-    }
-
-    // Save to daily_summaries
-    const { error } = await supabase.from("daily_summaries").insert({
-      generated_at: new Date().toISOString(),
-      top_topics: parsed.top_topics,
-      total_articles_analyzed: articles.length,
-      foreign_alerts: parsed.foreign_alerts || [],
+    console.log("  🔵 Gemini Flash: analyzing...");
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.5-flash",
+      generationConfig: {
+        temperature: 0.3,
+        topP: 0.8,
+        maxOutputTokens: 2048,
+      },
     });
 
-    if (error) {
-      console.error("❌ Save error:", error.message);
-    } else {
-      console.log("💾 Summary saved to Supabase");
+    const result = await Promise.race([
+      model.generateContent(prompt),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Gemini timeout")), 30000)
+      ),
+    ]);
 
-      // Save foreign alerts separately
-      if (parsed.foreign_alerts && parsed.foreign_alerts.length > 0) {
-        const alerts = parsed.foreign_alerts.map(a => ({
-          ...a,
-          generated_at: new Date().toISOString(),
-        }));
-        const { error: alertError } = await supabase
-          .from("foreign_alerts")
-          .insert(alerts);
-        if (alertError) console.error("❌ Foreign alerts error:", alertError.message);
-        else console.log(`🌍 ${alerts.length} foreign alerts saved`);
-      }
+    const text = result.response.text();
+    // Strip markdown fences if present
+    const clean = text.replace(/```json\n?|\n?```/g, "").trim();
+    const parsed = JSON.parse(clean);
 
-      // Generate share image
-      try {
-        const { generatePulseImage } = require("./imageGenerator");
-        const imageUrl = await generatePulseImage(parsed);
-        if (imageUrl) {
-          console.log("🖼️  Share image ready:", imageUrl);
-          parsed.image_url = imageUrl;
-        }
-      } catch (imgErr) {
-        console.error("⚠️  Image generation skipped:", imgErr.message);
-      }
-    }
-
-    return parsed;
+    console.log("  ✅ Gemini Flash: done");
+    return { parsed, raw: text, engine: "gemini-flash" };
   } catch (err) {
-    console.error("❌ Summarizer error:", err.message);
+    console.error("  ❌ Gemini Flash failed:", err.message);
     return null;
   }
 }
 
-module.exports = { runSummarizer };
+// ─────────────────────────────────────────────────────────────
+//  GROQ ENGINE
+// ─────────────────────────────────────────────────────────────
+async function runGroq(prompt) {
+  try {
+    console.log("  🟠 Groq (LLaMA): analyzing...");
+    const completion = await Promise.race([
+      groq.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3,
+        max_tokens: 2048,
+        response_format: { type: "json_object" },
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Groq timeout")), 30000)
+      ),
+    ]);
+
+    const text = completion.choices[0]?.message?.content || "";
+    const clean = text.replace(/```json\n?|\n?```/g, "").trim();
+    const parsed = JSON.parse(clean);
+
+    console.log("  ✅ Groq: done");
+    return { parsed, raw: text, engine: "groq-llama" };
+  } catch (err) {
+    console.error("  ❌ Groq failed:", err.message);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  RACE + PICK BEST
+// ─────────────────────────────────────────────────────────────
+async function runDualEngineAnalysis(articles) {
+  const prompt = buildPrompt(articles);
+
+  console.log("\n🧠 Running dual-engine analysis (Gemini Flash + Groq)...");
+  const [geminiResult, groqResult] = await Promise.all([
+    runGemini(prompt),
+    runGroq(prompt),
+  ]);
+
+  const candidates = [geminiResult, groqResult].filter(Boolean);
+
+  if (candidates.length === 0) {
+    console.error("❌ Both engines failed");
+    return null;
+  }
+
+  // Score each result
+  const scored = candidates.map((c) => ({
+    ...c,
+    ...scoreResult(c.parsed, c.engine),
+  }));
+
+  scored.forEach((s) => {
+    console.log(`  📊 ${s.engine}: score=${s.score}${s.reasons.length ? ` (${s.reasons.join(", ")})` : ""}`);
+  });
+
+  // Pick the winner
+  const winner = scored.sort((a, b) => b.score - a.score)[0];
+  console.log(`\n🏆 Winner: ${winner.engine} (score: ${winner.score})`);
+
+  // Attach metadata
+  winner.parsed._engine_used = winner.engine;
+  winner.parsed._engine_score = winner.score;
+  winner.parsed._both_engines_ran = candidates.length === 2;
+  winner.parsed.total_articles_analyzed = articles.length;
+
+  return winner.parsed;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  FETCH RECENT ARTICLES from Supabase
+// ─────────────────────────────────────────────────────────────
+async function getRecentArticles() {
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from("raw_signals")
+    .select("source, category, title, summary, published_at")
+    .gte("scraped_at", twoHoursAgo)
+    .order("scraped_at", { ascending: false })
+    .limit(150);
+
+  if (error) {
+    console.error("❌ Failed to fetch articles:", error.message);
+    return [];
+  }
+  return data || [];
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SAVE SUMMARY to Supabase
+// ─────────────────────────────────────────────────────────────
+async function saveSummary(summary) {
+  const { error } = await supabase.from("summaries").insert({
+    top_topics: summary.top_topics,
+    foreign_alerts: summary.foreign_alerts,
+    overall_sentiment: summary.overall_sentiment,
+    dominant_category: summary.dominant_category,
+    analysis_confidence: summary.analysis_confidence,
+    total_articles_analyzed: summary.total_articles_analyzed,
+    engine_used: summary._engine_used,
+    engine_score: summary._engine_score,
+    both_engines_ran: summary._both_engines_ran,
+    generated_at: summary.generated_at || new Date().toISOString(),
+    created_at: new Date().toISOString(),
+  });
+
+  if (error) console.error("❌ Summary save error:", error.message);
+  else console.log(`💾 Summary saved (engine: ${summary._engine_used})`);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  MAIN RUNNER — called by cron every 2 hours
+// ─────────────────────────────────────────────────────────────
+async function runSummarizer() {
+  console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log("🧠 SUMMARIZER — dual engine");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+  const articles = await getRecentArticles();
+
+  if (articles.length < 5) {
+    console.log(`⚠️  Only ${articles.length} articles — skipping (need at least 5)`);
+    return null;
+  }
+
+  console.log(`📰 Analyzing ${articles.length} articles...`);
+  const summary = await runDualEngineAnalysis(articles);
+
+  if (!summary) {
+    console.error("❌ Summarizer failed — no output from either engine");
+    return null;
+  }
+
+  await saveSummary(summary);
+
+  console.log("\n📊 Summary output:");
+  console.log(`  Engine: ${summary._engine_used} (score: ${summary._engine_score})`);
+  console.log(`  Both ran: ${summary._both_engines_ran}`);
+  console.log(`  Confidence: ${summary.analysis_confidence}`);
+  console.log(`  Sentiment: ${summary.overall_sentiment}`);
+  console.log(`  Topics: ${summary.top_topics?.map((t) => t.name).join(" · ")}`);
+
+  return summary;
+}
+
+module.exports = { runSummarizer, runDualEngineAnalysis };
