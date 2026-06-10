@@ -5,7 +5,7 @@ const { setCache, getCache, clearCache } = require("../config/cache");
 const { runAllScrapers } = require("../scrapers/newsScraper");
 const { runSummarizer } = require("../services/summarizer");
 
-// GET /api/pulse
+// ─── GET /api/pulse ───────────────────────────────────────────
 router.get("/pulse", async (req, res) => {
   try {
     const cached = getCache("pulse");
@@ -19,7 +19,7 @@ router.get("/pulse", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/news
+// ─── GET /api/news ────────────────────────────────────────────
 router.get("/news", async (req, res) => {
   try {
     const { source, limit = 20 } = req.query;
@@ -36,7 +36,7 @@ router.get("/news", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/summaries
+// ─── GET /api/summaries ───────────────────────────────────────
 router.get("/summaries", async (req, res) => {
   try {
     const cached = getCache("summaries");
@@ -50,7 +50,7 @@ router.get("/summaries", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/foreign-alerts
+// ─── GET /api/foreign-alerts ──────────────────────────────────
 router.get("/foreign-alerts", async (req, res) => {
   try {
     const cached = getCache("foreign_alerts");
@@ -64,7 +64,7 @@ router.get("/foreign-alerts", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/naira
+// ─── GET /api/naira ───────────────────────────────────────────
 router.get("/naira", async (req, res) => {
   try {
     const cached = getCache("naira");
@@ -78,7 +78,7 @@ router.get("/naira", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/subscribers
+// ─── GET /api/subscribers ─────────────────────────────────────
 router.get("/subscribers", async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -90,7 +90,7 @@ router.get("/subscribers", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/subscribe
+// ─── POST /api/subscribe ──────────────────────────────────────
 router.post("/subscribe", async (req, res) => {
   try {
     const { name, email, whatsapp } = req.body;
@@ -113,7 +113,6 @@ router.post("/subscribe", async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    // Send welcome email
     if (email && process.env.RESEND_API_KEY) {
       try {
         const { Resend } = require("resend");
@@ -143,12 +142,11 @@ router.post("/subscribe", async (req, res) => {
         console.error("⚠️  Welcome email failed:", emailErr.message);
       }
     }
-
     res.json({ success: true, message: "Subscribed! Check your email for confirmation." });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/unsubscribe
+// ─── POST /api/unsubscribe ────────────────────────────────────
 router.post("/unsubscribe", async (req, res) => {
   try {
     const { email } = req.body;
@@ -157,14 +155,14 @@ router.post("/unsubscribe", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/trigger/scrape
+// ─── POST /api/trigger/scrape ─────────────────────────────────
 router.post("/trigger/scrape", async (req, res) => {
   clearCache();
   const articles = await runAllScrapers();
   res.json({ success: true, articles_scraped: articles.length });
 });
 
-// POST /api/trigger/summarize
+// ─── POST /api/trigger/summarize ─────────────────────────────
 router.post("/trigger/summarize", async (req, res) => {
   clearCache();
   const summary = await runSummarizer();
@@ -172,7 +170,7 @@ router.post("/trigger/summarize", async (req, res) => {
   res.json({ success: true, summary });
 });
 
-// POST /api/trigger/digest — manually test digest
+// ─── POST /api/trigger/digest ─────────────────────────────────
 router.post("/trigger/digest", async (req, res) => {
   try {
     const { sendDailyDigest } = require("../services/digestService");
@@ -181,7 +179,7 @@ router.post("/trigger/digest", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/health
+// ─── GET /api/health ──────────────────────────────────────────
 router.get("/health", (req, res) => {
   res.json({
     status: "ok",
@@ -191,4 +189,469 @@ router.get("/health", (req, res) => {
   });
 });
 
+// ─── POST /api/ai-chat (Groq — free) ─────────────────────────
+router.post("/ai-chat", async (req, res) => {
+  try {
+    const { messages, context } = req.body;
+    if (!process.env.GROQ_API_KEY) {
+      return res.status(500).json({ success: false, error: "GROQ_API_KEY not set in .env" });
+    }
+    const Groq = require("groq-sdk");
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 1000,
+      messages: [
+        {
+          role: "system",
+          content: `You are Nigeria Pulse AI assistant. You help users understand Nigerian news, politics, economy, and current events. Be concise, factual, and helpful. ${context || ""}`,
+        },
+        ...messages,
+      ],
+    });
+    res.json({ success: true, text: response.choices[0].message.content });
+  } catch (err) {
+    console.error("❌ AI chat error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ═════════════════════════════════════════════════════════════
+//  NEW FEATURES
+// ═════════════════════════════════════════════════════════════
+
+// ─── GET /api/naira-rate/current ──────────────────────────────
+router.get("/naira-rate/current", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("naira_rates")
+      .select("usd_to_ngn, eur_to_ngn, gbp_to_ngn, recorded_at")
+      .order("recorded_at", { ascending: false })
+      .limit(1)
+      .single();
+    if (error) throw error;
+
+    const { data: prev } = await supabase
+      .from("naira_rates")
+      .select("usd_to_ngn")
+      .order("recorded_at", { ascending: false })
+      .range(1, 1)
+      .single();
+
+    const change = prev
+      ? ((data.usd_to_ngn - prev.usd_to_ngn) / prev.usd_to_ngn) * 100
+      : 0;
+
+    res.json({
+      success: true,
+      data: {
+        ...data,
+        usd_change_pct: parseFloat(change.toFixed(2)),
+        direction: change > 0 ? "up" : change < 0 ? "down" : "flat",
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── GET /api/naira-rate/chart ────────────────────────────────
+router.get("/naira-rate/chart", async (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days || "7", 10), 30);
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const { data, error } = await supabase
+      .from("naira_rates")
+      .select("usd_to_ngn, eur_to_ngn, gbp_to_ngn, recorded_at")
+      .gte("recorded_at", since.toISOString())
+      .order("recorded_at", { ascending: true });
+    if (error) throw error;
+
+    const hourly = {};
+    (data || []).forEach((row) => {
+      const hour = row.recorded_at.slice(0, 13);
+      if (!hourly[hour]) hourly[hour] = { sum: 0, count: 0, eur: 0, gbp: 0 };
+      hourly[hour].sum += parseFloat(row.usd_to_ngn);
+      hourly[hour].eur += parseFloat(row.eur_to_ngn);
+      hourly[hour].gbp += parseFloat(row.gbp_to_ngn);
+      hourly[hour].count++;
+    });
+
+    const points = Object.entries(hourly)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([hour, v]) => ({
+        timestamp: `${hour}:00:00Z`,
+        usd_to_ngn: parseFloat((v.sum / v.count).toFixed(2)),
+        eur_to_ngn: parseFloat((v.eur / v.count).toFixed(2)),
+        gbp_to_ngn: parseFloat((v.gbp / v.count).toFixed(2)),
+      }));
+
+    const usdValues = points.map((p) => p.usd_to_ngn);
+    const stats = {
+      current: usdValues[usdValues.length - 1] || null,
+      min: Math.min(...usdValues),
+      max: Math.max(...usdValues),
+      change_pct: usdValues.length > 1
+        ? parseFloat((((usdValues.at(-1) - usdValues[0]) / usdValues[0]) * 100).toFixed(2))
+        : 0,
+    };
+
+    res.json({ success: true, data: points, stats, days });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── GET /api/topic/:id ───────────────────────────────────────
+router.get("/topic/:id", async (req, res) => {
+  try {
+    const topicIndex = parseInt(req.params.id, 10);
+    if (isNaN(topicIndex) || topicIndex < 0 || topicIndex > 4) {
+      return res.status(400).json({ success: false, error: "Invalid topic id (0-4)" });
+    }
+
+    const { data: summary, error: summaryErr } = await supabase
+      .from("daily_summaries")
+      .select("*")
+      .order("generated_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (summaryErr || !summary) {
+      return res.status(404).json({ success: false, error: "No summary available" });
+    }
+
+    const topic = summary.top_topics?.[topicIndex];
+    if (!topic) {
+      return res.status(404).json({ success: false, error: "Topic not found" });
+    }
+
+    const keywords = topic.keywords || [topic.name];
+    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+
+    const { data: articles } = await supabase
+      .from("raw_signals")
+      .select("source, category, title, summary, link, published_at")
+      .gte("scraped_at", fourHoursAgo)
+      .or(
+        keywords.slice(0, 3)
+          .map((kw) => `title.ilike.%${kw}%,summary.ilike.%${kw}%`)
+          .join(",")
+      )
+      .order("published_at", { ascending: false })
+      .limit(30);
+
+    const { data: foreignAlerts } = await supabase
+      .from("foreign_alerts")
+      .select("*")
+      .order("generated_at", { ascending: false })
+      .limit(10);
+
+    const relatedAlerts = (foreignAlerts || []).filter((a) =>
+      keywords.some((kw) =>
+        a.event?.toLowerCase().includes(kw.toLowerCase()) ||
+        a.nigeria_impact?.toLowerCase().includes(kw.toLowerCase())
+      )
+    );
+
+    const sentimentCounts = { positive: 0, negative: 0, neutral: 0 };
+    const positiveWords = ["growth", "improve", "rise", "gain", "success", "win", "increase", "boost"];
+    const negativeWords = ["crisis", "fall", "decline", "attack", "death", "fail", "drop", "loss", "arrest"];
+    (articles || []).forEach((a) => {
+      const text = `${a.title} ${a.summary}`.toLowerCase();
+      const pos = positiveWords.filter((w) => text.includes(w)).length;
+      const neg = negativeWords.filter((w) => text.includes(w)).length;
+      if (pos > neg) sentimentCounts.positive++;
+      else if (neg > pos) sentimentCounts.negative++;
+      else sentimentCounts.neutral++;
+    });
+
+    res.json({
+      success: true,
+      data: {
+        topic,
+        topic_index: topicIndex,
+        articles: articles || [],
+        related_alerts: relatedAlerts,
+        sentiment_breakdown: sentimentCounts,
+        total_articles: articles?.length || 0,
+        generated_at: summary.generated_at,
+        engine_used: summary.engine_used,
+        confidence: summary.analysis_confidence,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── GET /api/history ─────────────────────────────────────────
+router.get("/history", async (req, res) => {
+  try {
+    const { date, days = 7, limit = 14 } = req.query;
+
+    let query = supabase
+      .from("daily_summaries")
+      .select("id, top_topics, overall_sentiment, dominant_category, total_articles_analyzed, engine_used, analysis_confidence, generated_at")
+      .order("generated_at", { ascending: false });
+
+    if (date) {
+      const start = new Date(date); start.setHours(0, 0, 0, 0);
+      const end = new Date(date); end.setHours(23, 59, 59, 999);
+      query = query.gte("generated_at", start.toISOString()).lte("generated_at", end.toISOString());
+    } else {
+      const since = new Date();
+      since.setDate(since.getDate() - parseInt(days, 10));
+      query = query.gte("generated_at", since.toISOString()).limit(parseInt(limit, 10));
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const byDay = {};
+    (data || []).forEach((row) => {
+      const day = row.generated_at.slice(0, 10);
+      if (!byDay[day]) byDay[day] = row;
+    });
+
+    const history = Object.entries(byDay)
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([day, row]) => ({
+        date: day,
+        ...row,
+        top_topics: (row.top_topics || []).map((t) => ({
+          name: t.name,
+          intensity: t.intensity,
+          sentiment: t.sentiment,
+          category: t.category,
+        })),
+      }));
+
+    res.json({ success: true, data: history });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── GET /api/search ──────────────────────────────────────────
+router.get("/search", async (req, res) => {
+  try {
+    const { q, category, source, limit = 20, offset = 0, days = 7 } = req.query;
+    if (!q || q.trim().length < 2) {
+      return res.status(400).json({ success: false, error: "Query must be at least 2 characters" });
+    }
+
+    const term = q.trim().slice(0, 100);
+    const since = new Date();
+    since.setDate(since.getDate() - parseInt(days, 10));
+
+    let query = supabase
+      .from("raw_signals")
+      .select("source, category, title, summary, link, published_at, scraped_at", { count: "exact" })
+      .gte("scraped_at", since.toISOString())
+      .or(`title.ilike.%${term}%,summary.ilike.%${term}%`)
+      .order("published_at", { ascending: false })
+      .range(parseInt(offset, 10), parseInt(offset, 10) + parseInt(limit, 10) - 1);
+
+    if (category) query = query.eq("category", category);
+    if (source) query = query.ilike("source", `%${source}%`);
+
+    const { data, count, error } = await query;
+    if (error) throw error;
+
+    const highlight = (text, term) => {
+      if (!text) return "";
+      const re = new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+      return text.replace(re, "**$1**");
+    };
+
+    const results = (data || []).map((row) => ({
+      ...row,
+      title_highlighted: highlight(row.title, term),
+      summary_highlighted: highlight(row.summary?.slice(0, 200), term),
+    }));
+
+    const sourceBreakdown = {};
+    results.forEach((r) => { sourceBreakdown[r.source] = (sourceBreakdown[r.source] || 0) + 1; });
+
+    res.json({
+      success: true,
+      data: results,
+      meta: {
+        total: count,
+        query: term,
+        days: parseInt(days, 10),
+        limit: parseInt(limit, 10),
+        offset: parseInt(offset, 10),
+        sources: Object.entries(sourceBreakdown)
+          .sort(([, a], [, b]) => b - a)
+          .slice(0, 10)
+          .map(([source, count]) => ({ source, count })),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── ADMIN AUTH MIDDLEWARE ────────────────────────────────────
+function adminAuth(req, res, next) {
+  const token = req.headers["x-admin-key"] || req.query.key;
+  const adminKey = process.env.ADMIN_KEY || "nigeria-pulse-admin-2026";
+  if (token !== adminKey) {
+    return res.status(401).json({ success: false, error: "Unauthorized" });
+  }
+  next();
+}
+
+// ─── GET /api/admin/health ────────────────────────────────────
+router.get("/admin/health", adminAuth, async (req, res) => {
+  try {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: sourceData } = await supabase
+      .from("raw_signals")
+      .select("source, category, scraped_at")
+      .gte("scraped_at", twoHoursAgo);
+
+    const sourceCounts = {};
+    (sourceData || []).forEach((row) => {
+      if (!sourceCounts[row.source]) {
+        sourceCounts[row.source] = { count: 0, category: row.category, last_seen: row.scraped_at };
+      }
+      sourceCounts[row.source].count++;
+      if (row.scraped_at > sourceCounts[row.source].last_seen) {
+        sourceCounts[row.source].last_seen = row.scraped_at;
+      }
+    });
+
+    const EXPECTED_SOURCES = [
+      "Punch Nigeria", "Vanguard Nigeria", "Premium Times", "Channels TV",
+      "Daily Trust", "Nairametrics", "BBC Africa", "BusinessDay Nigeria",
+      "Reddit Nigeria", "Google Trends Nigeria", "YouTube — Channels TV",
+    ];
+
+    const scraperHealth = EXPECTED_SOURCES.map((name) => ({
+      source: name,
+      status: sourceCounts[name] ? "ok" : "failed",
+      count: sourceCounts[name]?.count || 0,
+      last_seen: sourceCounts[name]?.last_seen || null,
+    }));
+
+    const { count: totalCount } = await supabase
+      .from("raw_signals").select("*", { count: "exact", head: true });
+
+    const { count: dayCount } = await supabase
+      .from("raw_signals").select("*", { count: "exact", head: true })
+      .gte("scraped_at", oneDayAgo);
+
+    const { count: summaryCount } = await supabase
+      .from("daily_summaries").select("*", { count: "exact", head: true })
+      .gte("generated_at", oneDayAgo);
+
+    const { data: latestSummary } = await supabase
+      .from("daily_summaries")
+      .select("generated_at, engine_used, analysis_confidence")
+      .order("generated_at", { ascending: false })
+      .limit(1).single();
+
+    const { count: subscriberCount } = await supabase
+      .from("subscribers").select("*", { count: "exact", head: true })
+      .eq("active", true);
+
+    const { data: digestLogs } = await supabase
+      .from("digest_logs")
+      .select("sent_at, total_sent, email_sent, whatsapp_sent, failed")
+      .order("sent_at", { ascending: false }).limit(5);
+
+    const { data: latestRate } = await supabase
+      .from("naira_rates")
+      .select("recorded_at, usd_to_ngn")
+      .order("recorded_at", { ascending: false })
+      .limit(1).single();
+
+    const rateAge = latestRate
+      ? Math.round((Date.now() - new Date(latestRate.recorded_at).getTime()) / 60000)
+      : null;
+
+    res.json({
+      success: true,
+      data: {
+        timestamp: new Date().toISOString(),
+        scrapers: {
+          sources: scraperHealth,
+          ok_count: scraperHealth.filter((s) => s.status === "ok").length,
+          failed_count: scraperHealth.filter((s) => s.status === "failed").length,
+        },
+        articles: {
+          total: totalCount,
+          last_24h: dayCount,
+          last_2h: sourceData?.length || 0,
+        },
+        summaries: {
+          last_24h: summaryCount,
+          latest: latestSummary || null,
+        },
+        naira_rate: {
+          age_minutes: rateAge,
+          current_usd: latestRate?.usd_to_ngn,
+          status: rateAge !== null && rateAge < 150 ? "fresh" : "stale",
+        },
+        subscribers: { active: subscriberCount },
+        digest_history: digestLogs || [],
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── POST /api/admin/test-push ────────────────────────────────
+router.post("/admin/test-push", adminAuth, async (req, res) => {
+  try {
+    let triggerPushNotifications;
+    try {
+      triggerPushNotifications = require("../services/pushNotification").triggerPushNotifications;
+    } catch {
+      return res.json({ success: true, message: "Push service not set up yet — skipped." });
+    }
+    await triggerPushNotifications({
+      name: "Test Alert",
+      summary: "This is a test push notification from Nigeria Pulse admin.",
+      intensity: 8,
+    });
+    res.json({ success: true, message: "Push sent" });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── POST /api/push/subscribe ─────────────────────────────────
+router.post("/push/subscribe", async (req, res) => {
+  try {
+    const { subscription } = req.body;
+    if (!subscription?.endpoint) {
+      return res.status(400).json({ success: false, error: "Invalid subscription object" });
+    }
+    const { error } = await supabase.from("push_subscriptions").upsert(
+      {
+        endpoint: subscription.endpoint,
+        p256dh: subscription.keys?.p256dh,
+        auth: subscription.keys?.auth,
+        created_at: new Date().toISOString(),
+        last_used: new Date().toISOString(),
+      },
+      { onConflict: "endpoint" }
+    );
+    if (error) throw error;
+    res.json({ success: true, message: "Push subscription saved" });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── module.exports must be the LAST line ─────────────────────
 module.exports = router;
