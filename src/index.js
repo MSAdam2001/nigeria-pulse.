@@ -14,7 +14,17 @@ const { sendDailyDigest } = require("./services/digestService");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// ─── CORS — allow live site + local dev ──────────────────────
+app.use(cors({
+  origin: [
+    "https://www.nigeriapulse.site",
+    "https://nigeriapulse.site",
+    "http://localhost:3000",
+  ],
+  methods: ["GET", "POST"],
+  credentials: true,
+}));
+
 app.use(express.json());
 app.use("/api", apiRoutes);
 app.use("/images", express.static("public/images"));
