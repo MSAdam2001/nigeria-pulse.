@@ -304,7 +304,7 @@ router.get("/naira-rate/chart", async (req, res) => {
   }
 });
 
-// ─── GET /api/topic/:id ───────────────────────────────────────
+// ─── GET /api/topic/:id ───────────────────────────────────────────
 router.get("/topic/:id", async (req, res) => {
   try {
     const topicIndex = parseInt(req.params.id, 10);
@@ -328,21 +328,54 @@ router.get("/topic/:id", async (req, res) => {
       return res.status(404).json({ success: false, error: "Topic not found" });
     }
 
-    const keywords = topic.keywords || [topic.name];
-    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+    // ── EXPANDED: 24h window instead of 4h ──
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    const { data: articles } = await supabase
+    // ── Build keywords from topic name + keywords array ──
+    const rawKeywords = [
+      topic.name,
+      ...(topic.keywords || []),
+    ];
+
+    // Split multi-word topic name into individual words (min 4 chars) for broader matching
+    const nameWords = topic.name
+      .split(/\s+/)
+      .filter((w) => w.length >= 4)
+      .map((w) => w.replace(/[^a-zA-Z0-9]/g, ""));
+
+    const allKeywords = [...new Set([...rawKeywords, ...nameWords])].slice(0, 6);
+
+    // Build OR filter
+    const orFilter = allKeywords
+      .map((kw) => `title.ilike.%${kw}%,summary.ilike.%${kw}%`)
+      .join(",");
+
+    let { data: articles } = await supabase
       .from("raw_signals")
-      .select("source, category, title, summary, link, published_at")
-      .gte("scraped_at", fourHoursAgo)
-      .or(
-        keywords.slice(0, 3)
-          .map((kw) => `title.ilike.%${kw}%,summary.ilike.%${kw}%`)
-          .join(",")
-      )
+      .select("source, category, title, summary, link, published_at, scraped_at")
+      .gte("scraped_at", twentyFourHoursAgo)
+      .or(orFilter)
       .order("published_at", { ascending: false })
       .limit(30);
 
+    // ── FALLBACK: if still no articles, return recent general news ──
+    if (!articles || articles.length === 0) {
+      const fallbackCategories = topic.category
+        ? [topic.category, "general"]
+        : ["general", "broadcast", "investigative"];
+
+      const { data: fallback } = await supabase
+        .from("raw_signals")
+        .select("source, category, title, summary, link, published_at, scraped_at")
+        .gte("scraped_at", twentyFourHoursAgo)
+        .in("category", fallbackCategories)
+        .order("published_at", { ascending: false })
+        .limit(20);
+
+      articles = fallback || [];
+    }
+
+    // ── Foreign alerts ──
     const { data: foreignAlerts } = await supabase
       .from("foreign_alerts")
       .select("*")
@@ -350,15 +383,16 @@ router.get("/topic/:id", async (req, res) => {
       .limit(10);
 
     const relatedAlerts = (foreignAlerts || []).filter((a) =>
-      keywords.some((kw) =>
+      allKeywords.some((kw) =>
         a.event?.toLowerCase().includes(kw.toLowerCase()) ||
         a.nigeria_impact?.toLowerCase().includes(kw.toLowerCase())
       )
     );
 
+    // ── Sentiment breakdown ──
     const sentimentCounts = { positive: 0, negative: 0, neutral: 0 };
-    const positiveWords = ["growth", "improve", "rise", "gain", "success", "win", "increase", "boost"];
-    const negativeWords = ["crisis", "fall", "decline", "attack", "death", "fail", "drop", "loss", "arrest"];
+    const positiveWords = ["growth", "improve", "rise", "gain", "success", "win", "increase", "boost", "record", "achieve"];
+    const negativeWords = ["crisis", "fall", "decline", "attack", "death", "fail", "drop", "loss", "arrest", "protest", "strike"];
     (articles || []).forEach((a) => {
       const text = `${a.title} ${a.summary}`.toLowerCase();
       const pos = positiveWords.filter((w) => text.includes(w)).length;
