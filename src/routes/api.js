@@ -304,7 +304,24 @@ router.get("/naira-rate/chart", async (req, res) => {
   }
 });
 
-// ─── GET /api/topic/:id ───────────────────────────────────────────
+// ─── GET /api/topic/:id ─────────────────────────────────────────────────────
+// REPLACES the existing router.get("/topic/:id", ...) handler in routes/api.js
+//
+// WHAT'S NEW vs your current version:
+//  1. Generates a full, original AI-written article (headline + byline + 5-8
+//     paragraphs) from the scraped snippets, using Groq — NOT copied text from
+//     any source. This is what powers the new ABC-News-style reading page.
+//  2. The article is CACHED in the `daily_summaries` table (new JSON column
+//     `generated_articles`) so it's written ONCE per topic per refresh cycle,
+//     not regenerated on every page view — keeps it fast and cheap.
+//  3. Still returns articles[] (the raw source list) for the "Sources" section
+//     at the bottom of the page, and sentiment_breakdown for the sidebar.
+//
+// REQUIRES: a new column on daily_summaries:
+//   ALTER TABLE daily_summaries ADD COLUMN generated_articles JSONB DEFAULT '{}';
+// (Run this once in Supabase SQL editor — see migration note at bottom of file)
+// ─────────────────────────────────────────────────────────────────────────────
+
 router.get("/topic/:id", async (req, res) => {
   try {
     const topicIndex = parseInt(req.params.id, 10);
@@ -312,6 +329,7 @@ router.get("/topic/:id", async (req, res) => {
       return res.status(400).json({ success: false, error: "Invalid topic id (0-4)" });
     }
 
+    // 1. Load the latest summary
     const { data: summary, error: summaryErr } = await supabase
       .from("daily_summaries")
       .select("*")
@@ -328,60 +346,43 @@ router.get("/topic/:id", async (req, res) => {
       return res.status(404).json({ success: false, error: "Topic not found" });
     }
 
-    // ── EXPANDED: 24h window instead of 4h ──
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
-    // ── Build keywords from topic name + keywords array ──
-    const rawKeywords = [
-      topic.name,
-      ...(topic.keywords || []),
-    ];
-
-    // Split multi-word topic name into individual words (min 4 chars) for broader matching
-    const nameWords = topic.name
+    // 2. Build keyword list (topic name words + keywords array)
+    const nameWords = (topic.name || "")
       .split(/\s+/)
       .filter((w) => w.length >= 4)
       .map((w) => w.replace(/[^a-zA-Z0-9]/g, ""));
+    const allKeywords = [...new Set([topic.name, ...(topic.keywords || []), ...nameWords])].slice(0, 6);
 
-    const allKeywords = [...new Set([...rawKeywords, ...nameWords])].slice(0, 6);
-
-    // Build OR filter
-    const orFilter = allKeywords
-      .map((kw) => `title.ilike.%${kw}%,summary.ilike.%${kw}%`)
-      .join(",");
-
-    let { data: articles } = await supabase
-      .from("raw_signals")
-      .select("source, category, title, summary, link, published_at, scraped_at")
-      .gte("scraped_at", twentyFourHoursAgo)
-      .or(orFilter)
-      .order("published_at", { ascending: false })
-      .limit(30);
-
-    // ── FALLBACK: if still no articles, return recent general news ──
-    if (!articles || articles.length === 0) {
-      const fallbackCategories = topic.category
-        ? [topic.category, "general"]
-        : ["general", "broadcast", "investigative"];
-
+    // 3. Fetch matching articles — progressive window (48h → 7d → 30d → fallback)
+    const WINDOWS = [48, 168, 720];
+    let articles = [];
+    for (const hours of WINDOWS) {
+      const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+      const orFilter = allKeywords.map((kw) => `title.ilike.%${kw}%,summary.ilike.%${kw}%`).join(",");
+      const { data } = await supabase
+        .from("raw_signals")
+        .select("source, category, title, summary, link, published_at, scraped_at")
+        .gte("scraped_at", since)
+        .or(orFilter)
+        .order("published_at", { ascending: false })
+        .limit(20);
+      if (data && data.length > 0) { articles = data; break; }
+    }
+    if (articles.length === 0) {
       const { data: fallback } = await supabase
         .from("raw_signals")
         .select("source, category, title, summary, link, published_at, scraped_at")
-        .gte("scraped_at", twentyFourHoursAgo)
-        .in("category", fallbackCategories)
-        .order("published_at", { ascending: false })
-        .limit(20);
-
+        .order("scraped_at", { ascending: false })
+        .limit(15);
       articles = fallback || [];
     }
 
-    // ── Foreign alerts ──
+    // 4. Related foreign alerts
     const { data: foreignAlerts } = await supabase
       .from("foreign_alerts")
       .select("*")
       .order("generated_at", { ascending: false })
       .limit(10);
-
     const relatedAlerts = (foreignAlerts || []).filter((a) =>
       allKeywords.some((kw) =>
         a.event?.toLowerCase().includes(kw.toLowerCase()) ||
@@ -389,12 +390,12 @@ router.get("/topic/:id", async (req, res) => {
       )
     );
 
-    // ── Sentiment breakdown ──
+    // 5. Sentiment breakdown
     const sentimentCounts = { positive: 0, negative: 0, neutral: 0 };
     const positiveWords = ["growth", "improve", "rise", "gain", "success", "win", "increase", "boost", "record", "achieve"];
     const negativeWords = ["crisis", "fall", "decline", "attack", "death", "fail", "drop", "loss", "arrest", "protest", "strike"];
-    (articles || []).forEach((a) => {
-      const text = `${a.title} ${a.summary}`.toLowerCase();
+    articles.forEach((a) => {
+      const text = `${a.title} ${a.summary || ""}`.toLowerCase();
       const pos = positiveWords.filter((w) => text.includes(w)).length;
       const neg = negativeWords.filter((w) => text.includes(w)).length;
       if (pos > neg) sentimentCounts.positive++;
@@ -402,12 +403,31 @@ router.get("/topic/:id", async (req, res) => {
       else sentimentCounts.neutral++;
     });
 
+    // 6. ── GENERATE OR REUSE THE FULL AI ARTICLE ──
+    const cachedArticles = summary.generated_articles || {};
+    let fullArticle = cachedArticles[topicIndex];
+
+    // Only generate if not already cached for THIS summary (summary.id ties cache to refresh cycle)
+    if (!fullArticle || fullArticle.summary_id !== summary.id) {
+      fullArticle = await generateFullArticle(topic, articles, allKeywords);
+      fullArticle.summary_id = summary.id;
+
+      // Save back to cache (fire-and-forget — don't block the response on failure)
+      const updatedCache = { ...cachedArticles, [topicIndex]: fullArticle };
+      supabase
+        .from("daily_summaries")
+        .update({ generated_articles: updatedCache })
+        .eq("id", summary.id)
+        .then(({ error }) => { if (error) console.error("⚠️ Article cache save failed:", error.message); });
+    }
+
     res.json({
       success: true,
       data: {
         topic,
         topic_index: topicIndex,
-        articles: articles || [],
+        article: fullArticle, // { headline, byline, paragraphs[], generated_at }
+        articles: articles || [],          // raw sources, for "Sources" section
         related_alerts: relatedAlerts,
         sentiment_breakdown: sentimentCounts,
         total_articles: articles?.length || 0,
@@ -421,6 +441,87 @@ router.get("/topic/:id", async (req, res) => {
   }
 });
 
+// ─── Helper: generateFullArticle ───────────────────────────────────────────
+// Sends the topic + scraped snippets to Groq and asks it to write an
+// ORIGINAL full-length article (not copied text) in news style.
+async function generateFullArticle(topic, articles, keywords) {
+  const FALLBACK = {
+    headline: topic.name,
+    byline: "Nigeria Pulse Intelligence",
+    paragraphs: [
+      topic.summary || "Full coverage for this topic is being compiled.",
+      topic.sentiment_reason || "",
+    ].filter(Boolean),
+    generated_at: new Date().toISOString(),
+  };
+
+  if (!process.env.GROQ_API_KEY || articles.length === 0) {
+    return FALLBACK;
+  }
+
+  try {
+    const Groq = require("groq-sdk");
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+    // Build a compact digest of source snippets for the model to synthesize
+    const sourceDigest = articles
+      .slice(0, 12)
+      .map((a, i) => `[${i + 1}] ${a.source}: "${a.title}" — ${(a.summary || "").slice(0, 180)}`)
+      .join("\n");
+
+    const prompt = `You are a Nigerian news desk editor writing an ORIGINAL news article for "Nigeria Pulse". You are given a topic and short snippets gathered from multiple Nigerian news outlets monitoring this story. Your job is to SYNTHESIZE these into one cohesive, original article — written entirely in your own words. NEVER copy phrases verbatim from the snippets. Write like a wire-service journalist (Reuters/AP style): factual, neutral, clear.
+
+TOPIC: ${topic.name}
+AI SUMMARY: ${topic.summary || ""}
+CATEGORY: ${topic.category || "general"}
+
+SOURCE SNIPPETS (for context only — do not quote directly):
+${sourceDigest}
+
+Write a JSON object with this EXACT shape and nothing else (no markdown, no preamble):
+{
+  "headline": "a clear, specific news headline (not the topic name verbatim, write it like a real headline)",
+  "paragraphs": [
+    "opening paragraph stating the core news (2-3 sentences)",
+    "second paragraph with supporting context/detail",
+    "third paragraph — different angle or stakeholder reaction",
+    "fourth paragraph — broader implications for Nigeria",
+    "closing paragraph — what happens next / what to watch"
+  ]
+}
+
+Each paragraph should be 2-4 sentences. Total length 350-550 words. Do not invent specific quotes, names, or statistics that are not implied by the snippets — stay general where source detail is thin. Output ONLY the JSON object.`;
+
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 1200,
+      temperature: 0.4,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const raw = response.choices[0].message.content.trim();
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON found in model output");
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!parsed.headline || !Array.isArray(parsed.paragraphs) || parsed.paragraphs.length === 0) {
+      throw new Error("Malformed article JSON");
+    }
+
+    return {
+      headline: parsed.headline,
+      byline: "Nigeria Pulse Intelligence",
+      paragraphs: parsed.paragraphs,
+      generated_at: new Date().toISOString(),
+    };
+  } catch (err) {
+    console.error("⚠️ Article generation failed, using fallback:", err.message);
+    return FALLBACK;
+  }
+}
+
+// ─── ONE-TIME MIGRATION (run in Supabase SQL editor before deploying) ───────
+// ALTER TABLE daily_summaries ADD COLUMN IF NOT EXISTS generated_articles JSONB DEFAULT '{}';
 // ─── GET /api/history ─────────────────────────────────────────
 router.get("/history", async (req, res) => {
   try {
